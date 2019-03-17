@@ -1,22 +1,20 @@
 import argparse
 import time
 import threading
-import os
-from threading import *
+import os 
+from defines import container_path
 from functools import wraps
 from pathlib import PureWindowsPath
-from fsCrypto import align_offset_length, encrypt_file_blocks, decrypt_file_blocks
-
-from defines import AES_KEY
 
 from winfspy import (
     FileSystem, BaseFileSystemOperations, enable_debug_log, FILE_ATTRIBUTE, CREATE_FILE_CREATE_OPTIONS,
-    NTStatusObjectNameNotFound, NTStatusDirectoryNotEmpty
+    NTStatusObjectNameNotFound, NTStatusDirectoryNotEmpty, exceptions
 )
-from winfspy.plumbing.winstuff import filetime_now, security_descriptor_factory
-thread_lock = threading.Lock()
 
 from winfspy.exceptions import NTStatusEndOfFile, NTStatusAccessDenied, NTStatusObjectNameCollision, NTStatusNotADirectory
+
+from winfspy.plumbing.winstuff import filetime_now, security_descriptor_factory
+thread_lock = threading.Lock()
 
 from objects import *
 
@@ -37,13 +35,12 @@ def logcounted(msg, **kwargs):
 
 class InMemoryFileSystemOperations(BaseFileSystemOperations):
     def __init__(self, volume_label, root_path = "./"):
-        self.root_path = root_path
         super().__init__()
         if len(volume_label) > 31:
             raise ValueError("`volume_label` must be 31 characters long max")
 
         max_file_nodes = 1024
-        max_file_size = 4 * 1024 * 1024
+        max_file_size = 7 * 1024 * 1024
         file_nodes = 1
         self._volume_info = {
             'total_size': max_file_nodes * max_file_size,
@@ -52,54 +49,12 @@ class InMemoryFileSystemOperations(BaseFileSystemOperations):
             ) * max_file_size,
             'volume_label': volume_label,
         }
-        print("Building tree...")
 
-        print(root_path)
-        self._entries = self.buildFileTree(root_path)
-        print("=====")
-
-    @threadsafe
-    def buildFileTree(self, root="./"):
-        files = []
-
-        files.append({"filename":"", "path":""})
-        entries = {}
-
-        for file in files:            
-            full_path = os.path.normpath(file["path"] +"/"+ file["filename"])
-            real_path = root + full_path 
-            print(full_path)
-            if os.path.isdir(real_path):
-                for file in os.listdir(root + full_path):
-                    files.append({"filename": file, "path": full_path})
-                entries[PureWindowsPath(full_path)] = FolderObj(str(full_path))
-            elif os.path.isfile(real_path):
-                offset = 0
-                length = os.stat(real_path).st_size
-
-                data_dec = self.readFileData(real_path,  offset, length)
-                entries[PureWindowsPath(full_path)] = FileObj(str(full_path), data_dec)
-
-        return entries 
-
-    def readFileData(self, path, offset, length):
-        print('[READ]')
-        offset_al, lenght_al = align_offset_length(offset, length)
-        
-        f = open(path, "rb")
-        f.seek(offset_al)
-        data = f.read(lenght_al)
-        if (len(data) == 0) :
-            return b''
-        
-        data_dec = decrypt_file_blocks(offset_al, AES_KEY, data)
-        return data_dec
-
-    def savingTree(self):
-        print('[SAVING]')
-
-        for file in self._entries.keys():
-            file.save()
+    @staticmethod
+    def normalizePath(path):
+        print("unNormalize path = ", path)
+        path = os.path.normpath(container_path + '/' + path)
+        return path
 
     @threadsafe
     def get_volume_info(self):
@@ -114,12 +69,18 @@ class InMemoryFileSystemOperations(BaseFileSystemOperations):
         self,
         file_name,
     ):
-        file_name = PureWindowsPath(file_name)
+        norm_path = self.normalizePath(file_name)
         logcounted("get_security_by_name", file_name=file_name)
-
+        
         # Retrieve file
+        file_obj = None
         try:
-            file_obj = self._entries[file_name]
+            if (os.path.isdir(norm_path) or file_name == '\\'):
+                file_obj = FolderObj(file_name, False)
+            elif (os.path.isfile(norm_path)):
+                file_obj = FileObj(file_name, False)
+            else:
+                raise NTStatusObjectNameNotFound()
         except KeyError:
             print(f'=================================== {file_name!r}')
             raise NTStatusObjectNameNotFound()
@@ -139,27 +100,25 @@ class InMemoryFileSystemOperations(BaseFileSystemOperations):
         security_descriptor,
         allocation_size
     ):
+        
         file_name = PureWindowsPath(file_name)
-
+        logcounted("create", file_name=file_name)
         # `granted_access` is already handle by winfsp
         # `allocation_size` useless for us
         # `security_descriptor` is not supported yet
 
         # Retrieve file
-        try:
-            parent_file_obj = self._entries[file_name.parent]
-            if isinstance(parent_file_obj, FileObj):
-                # TODO: check this code is ok
-                raise NTStatusNotADirectory()
-        except KeyError:
+        if (os.path.isfile(container_path + str(file_name.parent))):
+            raise NTStatusNotADirectory()
+        if (not os.path.isdir(container_path + str(file_name.parent))): 
             raise NTStatusObjectNameNotFound()
 
         # TODO: handle file_attributes
-
-        if create_options & CREATE_FILE_CREATE_OPTIONS.FILE_DIRECTORY_FILE:
-            file_obj = self._entries[file_name] = FolderObj(file_name)
+        if (create_options & CREATE_FILE_CREATE_OPTIONS.FILE_DIRECTORY_FILE):
+            # TODO: check attributes 
+            file_obj = FolderObj(file_name, True)
         else:
-            file_obj = self._entries[file_name] = FileObj(file_name)
+            file_obj = FileObj(file_name, True, file_attributes)
 
         return OpenedObj(file_obj)
 
@@ -178,53 +137,61 @@ class InMemoryFileSystemOperations(BaseFileSystemOperations):
 
     @threadsafe
     def rename(self, file_context, file_name, new_file_name, replace_if_exists):
+        logcounted("rename", file_context=file_context)
+
         file_name = PureWindowsPath(file_name)
         new_file_name = PureWindowsPath(new_file_name)
 
         # Retrieve file
-        try:
-            file_obj = self._entries[file_name]
-
-        except KeyError:
+        if (not os.path.exists(container_path + str(file_name))):
             raise NTStatusObjectNameNotFound()
-
-        try:
-            existing_new_file_obj = self._entries[new_file_name]
+       
+        if (os.path.exists(container_path + str(new_file_name))):
             if not replace_if_exists:
                 raise NTStatusObjectNameCollision()
-            if isinstance(file_obj, FileObj):
-                raise NTStatusAccessDenied()
+            os.remove(container_path + str(new_file_name))
 
-        except KeyError:
-            pass
-
-        for entry_path, entry in self._entries.items():
-            try:
-                relative = entry_path.relative_to(file_name)
-                new_entry_path = new_file_name / relative
-                print('===> RENAME', entry_path, new_entry_path)
-                entry = self._entries.pop(entry_path)
-                entry.path = new_entry_path
-                self._entries[new_entry_path] = entry
-            except ValueError:
-                continue
+        try:
+            os.rename(
+                container_path + str(new_file_name), 
+                container_path + str(new_file_name)
+            )
+        except Exception:
+            raise NTStatusAccessDenied()
 
     @threadsafe
     def open(
         self, file_name, create_options, granted_access
     ):
-        file_name = PureWindowsPath(file_name)
+        #file_name = PureWindowsPath(file_name)
 
         # `granted_access` is already handle by winfsp
 
         # Retrieve file
+        logcounted("open", file_name=file_name)
+
+        full_path = self.normalizePath(file_name)
+        
+        full_path = './' + os.path.normpath(container_path + file_name)
+        print(full_path)
+
         try:
-            file_obj = self._entries[file_name]
+            if (os.path.isfile(full_path)):
+                file_obj = FileObj(file_name, False)
+                print("Opened file...")
+            elif(os.path.isdir(full_path) or file_name == '\\'):
+                file_obj = FolderObj(file_name, False)
+                print("Opened dir...")    
+            else:    
+                raise NTStatusObjectNameNotFound()
         except KeyError:
             print(f'=================================== {file_name!r}')
             raise NTStatusObjectNameNotFound()
-
-        logcounted("open", file_name=file_name)
+        except Exception as e:
+            print(e)
+            print(f'Can\'t open by unknown reason {full_path}')
+            raise e
+        
         return OpenedObj(file_obj)
 
     @threadsafe
@@ -256,9 +223,11 @@ class InMemoryFileSystemOperations(BaseFileSystemOperations):
 
     @threadsafe
     def set_file_size(self, file_context, new_size, set_allocation_size):
+        #ToDo
         logcounted("set_file_size", file_context=file_context)
 
         file_obj = file_context.file_obj
+        return
         if not set_allocation_size:
             if new_size < file_obj.file_size:
                 file_obj.data = file_obj.data[:new_size]
@@ -266,52 +235,47 @@ class InMemoryFileSystemOperations(BaseFileSystemOperations):
                 file_obj.data = file_obj.data + bytearray(new_size - file_obj.file_size)
 
     def can_delete(self, file_context, file_name: str) -> None:
-        file_name = PureWindowsPath(file_name)
-
+        #file_name = PureWindowsPath(file_name)
+        logcounted("can_delete", file_name=file_name)
         # Retrieve file
-        try:
-            file_obj = self._entries[file_name]
-        except KeyError:
-            raise NTStatusObjectNameNotFound
-
-        if isinstance(file_obj, FolderObj):
-            for entry in self._entries.keys():
-                try:
-                    if entry.relative_to(file_name).parts:
-                        raise NTStatusDirectoryNotEmpty()
-                except ValueError:
-                    continue
-
+        if (os.path.isdir(container_path + file_name)):
+            if len(os.listdir(container_path + file_name)):
+                raise NTStatusDirectoryNotEmpty()
+        
+        if (not os.path.isfile(container_path + file_name)):
+            raise NTStatusObjectNameNotFound()
+       
     @threadsafe
     def read_directory(
         self, file_context, marker
     ):
+        logcounted("read_directory", file_name=file_context.file_obj.path)
+        file_name = file_context.file_obj.path
+        if (not os.path.isdir(self.normalizePath(file_name))):
+            raise NTStatusObjectNameNotFound()
+        
         entries = []
-        file_obj = file_context.file_obj
+        for file in os.listdir(container_path + file_context.file_obj.path) :
+            full_path = self.normalizePath(file_name + '/' + file)
+            cur_file_path = os.path.normpath(file_name + '/' + file)
 
-        if file_obj.path != PureWindowsPath("/"):
-            entries.append({'file_name': '..'})
-
-        for entry_path, entry_obj in self._entries.items():
-            try:
-                relative = entry_path.relative_to(file_obj.path)
-                # Not interested into ourself or our grandchildren
-                if len(relative.parts) == 1:
-                    print('==> ADD', entry_path)
-                    entries.append({'file_name': entry_path.name, **entry_obj.get_file_info()})
-            except ValueError:
-                continue
+            if (os.path.isdir(full_path) or cur_file_path == '\\'):
+                print("creating dir...", cur_file_path, full_path)
+                file_obj = FolderObj(cur_file_path, False)
+            elif (os.path.isfile(full_path)):
+                file_obj = FileObj(cur_file_path, False)
+            entries.append({'file_name': file, **file_obj.get_file_info()})
+        
         return entries
 
-    @threadsafe 
+    @threadsafe
     def read(self, file_context, offset, length):
         logcounted("read", file_context=file_context)
         file_obj = file_context.file_obj
-
-        if offset >= len(file_obj.data):
+        if offset >= file_obj.file_size:  
             raise NTStatusEndOfFile()
 
-        return file_obj.data[offset:offset+length]
+        return file_obj.read(offset, length)
 
     @threadsafe
     def write(
@@ -322,32 +286,37 @@ class InMemoryFileSystemOperations(BaseFileSystemOperations):
         write_to_end_of_file,
         constrained_io,
     ):
-        print("[WRITE]")
+        logcounted("write", file_name=file_context.file_obj.path)
+        print("write_to_end_of_file", write_to_end_of_file, "constrained_io", constrained_io )
         file_obj = file_context.file_obj
         length = len(buffer)
+        
+        buffer = b''.join([i for i in buffer])
 
-        if constrained_io:
-            if offset >= len(file_obj.data):
-                return 0
-            end_offset = min(len(file_obj.data), offset + length)
-            transferred_length = end_offset - offset
-            file_obj.data[offset:end_offset] = buffer[:transferred_length]
-            file_obj.save()
-            return transferred_length
-
-        else:
-            if write_to_end_of_file:
-                offset = len(file_obj.data)
-            end_offset = offset + length
-            file_obj.data[offset:end_offset] = buffer
-            file_obj.save()
-            return length
+        file_obj.write(offset, length, buffer, write_to_end_of_file)
+        return length
+        # if constrained_io:x
+        #     if offset >= file_obj.file_size():
+        #         return 0
+        #     end_offset = min(file_obj.file_size(), offset + length)
+        #     transferred_length = end_offset - offset
+        #     file_obj.write(offset, length, buffer[:transferred_length])
+        #     return transferred_length
+        # else:
+            
+        # else:
+        #     print("[INFO] writing in end of file")
+        #     if write_to_end_of_file:
+        #         offset = file_obj.file_size()
+        #     end_offset = offset + length
+        #     file_obj.write(offset, length, buffer)
+        #     return length
 
     def cleanup(self, file_context, file_name, flags) -> None:
         # TODO: expose FspCleanupDelete&friends
+        print("[INFO] cleanup file")
         if flags & 1:
-            file_name = PureWindowsPath(file_name)
             try:
-                del self._entries[file_name]
+                os.remove(self.normalizePath(file_name))
             except KeyError:
                 raise NTStatusObjectNameNotFound()

@@ -35,7 +35,7 @@ def main(mountpoint, label, debug):
         print('Starting FS')
         fs.start()
         print('FS started, keep it running for 100s')
-        time.sleep(100)
+        time.sleep(100000)
 
     finally:
         print('Stopping FS')
