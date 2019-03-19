@@ -1,8 +1,7 @@
 import argparse
 import time
 from winfspy import  FileSystem,  enable_debug_log
-from winfspy.plumbing.winstuff import filetime_now, security_descriptor_factory
-
+from winfspy.plumbing.winstuff import filetime_now
 from fsOperations.InMemoryFileSystemOperations import InMemoryFileSystemOperations
 
 from defines import container_path
@@ -35,7 +34,7 @@ def main(mountpoint, label, debug):
         print('Starting FS')
         fs.start()
         print('FS started, keep it running for 100s')
-        time.sleep(100000)
+        time.sleep(10000)
 
     finally:
         print('Stopping FS')

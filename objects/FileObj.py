@@ -6,42 +6,23 @@ import win32con, win32api, os
 import defines
 
 class FileObj(BaseFileObj):
-    def __init__(
-        self, 
-        path, 
-        createfile = False, 
-        attributes = FILE_ATTRIBUTE.FILE_ATTRIBUTE_NORMAL
-    ):
-        super().__init__(str(path))
-        if (not os.path.isfile(self.getNormPath()) and not createfile):
-            print("error file:", self.getNormPath(),"error file:", self.path)
-            raise Exception()
-           
-        if (createfile):
-            file = open(self.getNormPath(), "wb+")
-            win32api.SetFileAttributes(file, attributes)
-            file.close()
-            self.attributes = attributes
+    def __init__(self, path, root_path):
+        super().__init__(path, root_path)
+        self.attributes = FILE_ATTRIBUTE.FILE_ATTRIBUTE_NORMAL
+        self.data = b''
+    @property
+    def file_size(self):
+        return os.path.getsize(self.getNormPath())
+
+    @property
+    def allocation_size(self):
+        if self.file_size % 4096 == 0:
+            return self.file_size
         else:
-            self.attributes = FILE_ATTRIBUTE.FILE_ATTRIBUTE_NORMAL#os.stat(self.getNormPath())
-            #ToDo
-            #self.creation_time = now
-            #self.last_access_time = now
-            #self.last_write_time = now
-            #self.change_time = now
-            #self.index_number = 0
-
-    def __str__(self):
-        return self.path + " : " + "FileObj" 
-
-    def setAttributes(self, attributes):
-        file = open(self.getNormPath(), "wb")
-        win32api.SetFileAttributes(file, attributes)
-        file.close()
+            return ((self.file_size // 4096) + 1) * 4096
 
     def read(self, offset, length):
         print('[READ]')
-
         offset_al, lenght_al = align_offset_length(offset, length)
         
         f = open(self.getNormPath(), "rb")
@@ -52,31 +33,45 @@ class FileObj(BaseFileObj):
             return b''
         
         data_dec = decrypt_file_blocks(offset_al, defines.AES_KEY, data)
-        return data_dec[offset - offset_al: length]
-        
+        return data_dec[offset_al-offset:offset_al-offset+length]
+
+    def save(self, data):
+        print('[SAVE]')
+        buf_enc = encrypt_file_blocks(0, defines.AES_KEY, data)
     
-    def write(self, offset, length, buf, write_to_end_of_file):
+        f = open(self.getNormPath(), "wb+")
+        #f.seek(offset_al)
+        f.write(buf_enc)
+
+    def writing(
+        self,
+        file_context,
+        buffer,
+        offset,
+        write_to_end_of_file,
+        constrained_io
+    ):
         print('[WRITE]')
+        length = len(buffer)
 
-        length = len(buf)
-        offset_al, lenght_al = align_offset_length(offset, length)
-        print('buf', buf)
-        try:
-            source = self.read(offset_al, lenght_al)
-        except:
-            source = b''
+        offset = 0
+        length = os.stat(self.getNormPath()).st_size
+        data = self.read(offset, length)
 
-        source = source[:offset - offset_al] + buf #+ source[length + offset - offset_al:]
+        if constrained_io:
+            if offset >= len(data):
+                return 0
+            end_offset = min(len(data), offset + length)
+           
+            transferred_length = end_offset - offset
+            data = data[:offset] + buffer[:transferred_length] +  data[end_offset:]
+            self.save(data)
+            return transferred_length
 
-        buf_enc = encrypt_file_blocks(offset_al, defines.AES_KEY, source)
-   
-        fh = os.open(self.getNormPath(), os.O_WRONLY)
-        os.lseek(fh, offset_al, os.SEEK_SET)
-        os.write(fh, buf_enc)
-        os.ftruncate(fh, offset_al + len(buf_enc))
-            
-        
-        # 
-        #     print('truncate file:')
-        #     os.truncate(fh, offset_al + length) 
-         
+        else:
+            if write_to_end_of_file:
+                offset = len(data)
+            end_offset = offset + length
+            data = data[:offset] + buffer + data[end_offset:]
+            self.save(data)
+            return length

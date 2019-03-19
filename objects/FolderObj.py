@@ -6,29 +6,13 @@ import ctypes
 
 
 class FolderObj(BaseFileObj):
-    def __init__(
-        self, 
-        path, 
-        createFolder = False, 
-        attributes = FILE_ATTRIBUTE.FILE_ATTRIBUTE_DIRECTORY    
-    ):
-        super().__init__(path)  
-        if (not os.path.isdir(self.getNormPath()) and not createFolder and not path == '\\'):
-            print("error dir:", self.getNormPath())
-            raise Exception()
+    def __init__(self, path, root_path):
+        super().__init__(path, root_path)
+        self.file_size = 4096
+        self.allocation_size = 4096
         self.attributes = FILE_ATTRIBUTE.FILE_ATTRIBUTE_DIRECTORY
 
-        if (createFolder):
-            os.mkdir(self.getNormPath())
-            win32api.SetFileAttributes(self.getNormPath(), attributes)
-            #self.attributes = attributes
-        #else:
-            #self.attributes = FILE_ATTRIBUTE.FILE_ATTRIBUTE_DIRECTORY #os.stat(self.path)
-            #ToDo
-            #self.creation_time = now
-            #self.last_access_time = now
-            #self.last_write_time = now
-            #self.change_time = now
-            #self.index_number = 0
-
-        
+    def isEmpty():
+        return not os.listdir(
+            os.path.normpath(container_path + '/' + self.path)
+        )
