@@ -6,13 +6,21 @@ import ctypes
 
 
 class FolderObj(BaseFileObj):
-    def __init__(self, path, root_path):
-        super().__init__(path, root_path)
+    def __init__(self, path, creating =  False):
+        super().__init__(path)
+        if creating:
+            self.create()
         self.file_size = 4096
         self.allocation_size = 4096
         self.attributes = FILE_ATTRIBUTE.FILE_ATTRIBUTE_DIRECTORY
-
-    def isEmpty():
+    
+    def create(self):
+        os.mkdir(self.getNormPath())
+    
+    
+    def isEmpty(self):
         return not os.listdir(
-            os.path.normpath(container_path + '/' + self.path)
+            self.getNormPath()
         )
+
+        #ToDo renaming removing
