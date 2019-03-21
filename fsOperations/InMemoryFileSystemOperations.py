@@ -43,7 +43,7 @@ class InMemoryFileSystemOperations(BaseFileSystemOperations, ):
             raise ValueError("`volume_label` must be 31 characters long max")
 
         max_file_nodes = 1024
-        max_file_size = 4 * 1024 * 1024 * 1024
+        max_file_size = 16 * 1024 * 1024 * 1024 * 1024
         file_nodes = 1
         self._volume_info = {
             'total_size': max_file_nodes * max_file_size,
@@ -116,7 +116,6 @@ class InMemoryFileSystemOperations(BaseFileSystemOperations, ):
         allocation_size
     ):
         file_name = PureWindowsPath(file_name)
-
         # `granted_access` is already handle by winfsp
         # `allocation_size` useless for us
         # `security_descriptor` is not supported yet
@@ -133,9 +132,9 @@ class InMemoryFileSystemOperations(BaseFileSystemOperations, ):
         # TODO: handle file_attributes
 
         if create_options & CREATE_FILE_CREATE_OPTIONS.FILE_DIRECTORY_FILE:
-            file_obj = self._entries[file_name] = FolderObj(file_name, True)
+            file_obj = self._entries[file_name] = FolderObj(file_name, file_attributes, True)
         else:
-            file_obj = self._entries[file_name] = FileObj(file_name, True)
+            file_obj = self._entries[file_name] = FileObj(file_name, file_attributes, True)
         return OpenedObj(file_obj)
 
     @threadsafe
@@ -217,7 +216,7 @@ class InMemoryFileSystemOperations(BaseFileSystemOperations, ):
     @threadsafe
     def set_basic_info(self, file_context, file_attributes, creation_time, last_access_time, last_write_time, change_time, file_info) -> dict:
         logcounted("set_basic_info", file_context=file_context)
-
+        print("file_attributes", file_attributes)
         file_obj = file_context.file_obj
         if file_attributes != FILE_ATTRIBUTE.INVALID_FILE_ATTRIBUTES:
             file_obj.file_attributes = file_attributes
@@ -286,9 +285,9 @@ class InMemoryFileSystemOperations(BaseFileSystemOperations, ):
         logcounted("read", file_context=file_context)
         file_obj = file_context.file_obj
 
-        if offset >= len(file_obj.data):
+        if offset >= file_obj.file_size:
             raise NTStatusEndOfFile()
-
+        #return file_obj.read(offset, length)
         return file_obj.data[offset:offset+length]
 
     @threadsafe
@@ -301,17 +300,15 @@ class InMemoryFileSystemOperations(BaseFileSystemOperations, ):
         constrained_io,
     ):
         file_obj = file_context.file_obj
-        try:
-            print("WRITING...")
-            return file_obj.write(
-                file_context,
-                buffer,
-                offset,
-                write_to_end_of_file,
-                constrained_io
-            )
-        except Exception as e:
-            print(e)
+        #print("WRITING...")
+        return file_obj.write(
+            file_context,
+            buffer,
+            offset,
+            write_to_end_of_file,
+            constrained_io
+        )
+     
         # length = len(buffer)
 
         # if constrained_io:
@@ -333,6 +330,7 @@ class InMemoryFileSystemOperations(BaseFileSystemOperations, ):
         #    file_obj.save()
         #    return length
 
+    @threadsafe
     def cleanup(self, file_context, file_name, flags) -> None:
         # TODO: expose FspCleanupDelete&friends
         if flags & 1:
@@ -343,5 +341,9 @@ class InMemoryFileSystemOperations(BaseFileSystemOperations, ):
             except KeyError:
                 raise NTStatusObjectNameNotFound()
     
+    def overwrite(self, file_context, file_attributes, replace_file_attributes, allocation_size) -> None:
+        pass
+    
     def flush(self, file_context):
         file_context.file_obj.save()
+        pass
