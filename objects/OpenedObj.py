@@ -7,3 +7,4 @@ from winfspy.plumbing.winstuff import filetime_now
 class OpenedObj:
     def __init__(self, file_obj):
         self.file_obj = file_obj
+        file_obj.open()

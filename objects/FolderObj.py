@@ -14,8 +14,14 @@ class FolderObj(BaseFileObj):
     
     def create(self):
         os.mkdir(self.getNormPath())
-        win32api.SetFileAttributes(self.getNormPath(), self.attributes)
+        #win32api.SetFileAttributes(self.getNormPath(), self.attributes)
     
+    def open(self):
+        pass
+        
+    def close(self):
+        pass
+        
     @property
     def file_size(self):
         return self.getSize(self.path)

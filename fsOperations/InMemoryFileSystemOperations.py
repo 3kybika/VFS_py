@@ -14,8 +14,6 @@ from winfspy.plumbing.winstuff import filetime_now, SecurityDescriptor
 
 from winfspy.exceptions import NTStatusEndOfFile, NTStatusAccessDenied, NTStatusObjectNameCollision, NTStatusNotADirectory
 
-from filemanager import FileManager
-
 from objects import *
 
 thread_lock = threading.Lock()
@@ -75,9 +73,7 @@ class InMemoryFileSystemOperations(BaseFileSystemOperations, ):
             elif os.path.isfile(real_path):
                 offset = 0
                 length = os.stat(real_path).st_size
-
                 entries[PureWindowsPath(full_path)] = FileObj(str(full_path))
-
         return entries 
 
     @threadsafe
